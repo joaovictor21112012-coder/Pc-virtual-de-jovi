@@ -1,0 +1,92 @@
+name: Kali Linux Pessoal via Tailscale
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-kali:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout do Repositório
+        uses: actions/checkout@v4
+
+      - name: 1. Adicionar Repositório do Kali e Atualizar
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg
+          wget -q -O - https://archive.kali.org/archive-key.asc | sudo apt-key add -
+          echo "deb http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware" | sudo tee /etc/apt/sources.list.d/kali.list
+          sudo apt-get update
+
+      - name: 2. Instalar Desktop Kali (XFCE) e Ferramentas
+        run: |
+          # Instala o ambiente gráfico e as ferramentas principais do Kali
+          # Isso pode demorar bastante!
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y kali-desktop-xfce kali-tools-top10 tigervnc-standalone-server novnc
+          
+      - name: 3. Configurar Senha do VNC
+        run: |
+          mkdir -p ~/.vnc
+          echo "P@ssw0rd!" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+          
+          # Cria o script de inicialização do XFCE
+          cat <<EOF > ~/.vnc/xstartup
+          #!/bin/sh
+          unset SESSION_MANAGER
+          unset DBUS_SESSION_BUS_ADDRESS
+          exec startxfce4
+          EOF
+          chmod +x ~/.vnc/xstartup
+
+      - name: 4. Iniciar VNC e NoVNC
+        run: |
+          # Inicia o servidor VNC na porta 5901 (Display :1)
+          vncserver -geometry 1920x1080 -depth 24 :1
+          
+          # Inicia o NoVNC (para acesso via navegador) na porta 6080
+          websockify -D --web=/usr/share/novnc/ 6080 localhost:5901
+          echo "VNC e NoVNC iniciados!"
+
+      - name: 5. Instalar e Iniciar Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTH_KEY }} --hostname "kali-${{ github.run_id }}"
+
+      - name: 6. Obter IP e Detalhes da Conexão
+        run: |
+          TAILSCALE_IP=$(tailscale ip -4)
+          echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+          
+          echo "====================================================="
+          echo "        KALI LINUX PESSOAL - PRONTO PARA USO          "
+          echo "====================================================="
+          echo "IP do Tailscale: $TAILSCALE_IP"
+          echo "Senha do VNC: P@ssw0rd!"
+          echo ""
+          echo "--- COMO ACESSAR ---"
+          echo "Opção 1 (Navegador - Recomendado):"
+          echo "1. Certifique-se de que seu dispositivo está na rede Tailscale."
+          echo "2. Abra o navegador e acesse: http://$TAILSCALE_IP:6080/vnc.html"
+          echo "3. Clique em 'Connect' e insira a senha: P@ssw0rd!"
+          echo ""
+          echo "Opção 2 (App VNC Viewer):"
+          echo "1. Abra o app VNC Viewer no seu celular/PC."
+          echo "2. Conecte em: $TAILSCALE_IP:5901"
+          echo "3. Insira a senha: P@ssw0rd!"
+          echo "====================================================="
+
+      - name: 7. Manter Sessão Ativa
+        run: |
+          echo "Mantendo a máquina ligada por até 6 horas..."
+          while true; do
+            sleep 60
+            echo "Sessão ativa: $(date)"
+            # Verifica se o Tailscale caiu e reinicia se necessário
+            if ! tailscale status | grep -q "active"; then
+              echo "Tailscale caiu. Reiniciando..."
+              sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTH_KEY }} --hostname "kali-${{ github.run_id }}"
+            fi
+          done
