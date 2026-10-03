@@ -1,0 +1,102 @@
+name: Windows Roxo RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-windows:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: 1. Limpar espaço em disco
+        run: |
+          Remove-Item -Path "C:\Program Files\dotnet" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "C:\Program Files\Android" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "C:\Program Files\Java" -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host "Espaço liberado!"
+
+      - name: 2. Habilitar RDP e Firewall
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+      - name: 3. Criar Usuário e Senha
+        run: |
+          $Password = ConvertTo-SecureString "P@ssw0rd!" -AsPlainText -Force
+          Set-LocalUser -Name "runneradmin" -Password $Password
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
+          Write-Host "Usuário: runneradmin | Senha: P@ssw0rd!" -ForegroundColor Green
+
+      - name: 4. Aplicar Tema Roxo (Papel de Parede e Cores)
+        run: |
+          Write-Host "Baixando papel de parede roxo..." -ForegroundColor Magenta
+          $wallpaperUrl = "https://images.unsplash.com/photo-1557683316-973673baf926?q=80&w=1920&auto=format&fit=crop"
+          $wallpaperPath = "C:\Windows\Web\Wallpaper\purple.jpg"
+          Invoke-WebRequest -Uri $wallpaperUrl -OutFile $wallpaperPath
+          
+          Write-Host "Aplicando tema roxo..." -ForegroundColor Magenta
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $wallpaperPath
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value 10
+          
+          # Muda a cor de destaque do Windows para Roxo (AABBGGRR)
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\DWM' -Name AccentColor -Value 0xFF8000FF
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\DWM' -Name ColorPrevalence -Value 1
+          Write-Host "Tema roxo aplicado com sucesso!" -ForegroundColor Magenta
+
+      - name: 5. Instalar Tailscale
+        run: |
+          Write-Host "Baixando Tailscale..." -ForegroundColor Cyan
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          
+          Write-Host "Instalando Tailscale..." -ForegroundColor Cyan
+          Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet /norestart" -Wait
+          Remove-Item $installerPath -Force
+          
+          Write-Host "Iniciando Tailscale..." -ForegroundColor Cyan
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey ${{ secrets.TAILSCALE_AUTH_KEY }} --hostname "windows-purple-${{ github.run_id }}"
+          Start-Sleep -Seconds 15
+
+      - name: 6. Obter IP e Instalar Chrome
+        run: |
+          $tsIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          
+          Write-Host "Baixando Chrome..." -ForegroundColor Cyan
+          $chromeUrl = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
+          $installerPath = "$env:TEMP\chrome_installer.exe"
+          Invoke-WebRequest -Uri $chromeUrl -OutFile $installerPath
+          Start-Process -FilePath $installerPath -ArgumentList "/silent /install" -Wait
+          Remove-Item $installerPath -Force
+          Write-Host "Chrome instalado!" -ForegroundColor Cyan
+
+      - name: 7. Mostrar Detalhes da Conexão
+        run: |
+          Write-Host "`n=====================================================" -ForegroundColor Magenta
+          Write-Host "        WINDOWS ROXO RDP - PRONTO PARA USO           " -ForegroundColor Magenta
+          Write-Host "=====================================================" -ForegroundColor Magenta
+          Write-Host "IP do Tailscale: $env:TAILSCALE_IP" -ForegroundColor White
+          Write-Host "Usuário: runneradmin" -ForegroundColor White
+          Write-Host "Senha: P@ssw0rd!" -ForegroundColor White
+          Write-Host ""
+          Write-Host "--- COMO ACESSAR ---" -ForegroundColor Yellow
+          Write-Host "1. Certifique-se de que seu celular/PC está na rede Tailscale." -ForegroundColor White
+          Write-Host "2. Abra o aplicativo 'Área de Trabalho Remota' (RDP)." -ForegroundColor White
+          Write-Host "3. Conecte no IP: $env:TAILSCALE_IP" -ForegroundColor White
+          Write-Host "4. Use o usuário e senha acima." -ForegroundColor White
+          Write-Host "=====================================================" -ForegroundColor Magenta
+
+      - name: 8. Manter Sessão Ativa (6 horas)
+        run: |
+          Write-Host "Mantendo a máquina ligada por até 6 horas..." -ForegroundColor Green
+          while ($true) {
+            Start-Sleep -Seconds 60
+            Write-Host "Sessão ativa: $(Get-Date)" -ForegroundColor Green
+            $tsStatus = & "C:\Program Files\Tailscale\tailscale.exe" status
+            if ($tsStatus -notmatch "active") {
+              Write-Host "Tailscale caiu. Reiniciando..." -ForegroundColor Red
+              & "C:\Program Files\Tailscale\tailscale.exe" up --authkey ${{ secrets.TAILSCALE_AUTH_KEY }} --hostname "windows-purple-${{ github.run_id }}"
+            }
+          }
